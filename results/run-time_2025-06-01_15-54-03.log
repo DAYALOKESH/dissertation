@@ -1,0 +1,38 @@
+====================================================
+MoM SOLVER EXECUTION LOG
+====================================================
+Start Time: 2025-06-01 15:54:03
+====================================================
+
+PROBLEM PARAMETERS:
+- Matrix size: 9059 x 9059
+- Frequency: 9.70e+08 Hz
+- Wavelength: 0.3091 m
+- Segment size: 0.0773 m
+- Terrain step size: 10.0 m
+- Max terrain distance: 700.0 m
+- Terrain file: ./terrain/X.04
+- Terrain points: 72
+- Source: (0.0, 442.0) m
+- Observation height: 2.4 m
+
+Z MATRIX CONSTRUCTION:
+- Status: WELL-CONDITIONED
+- Construction time: 127.7161 seconds
+- Condition number: 5.444597e+01
+- Matrix norm: 4.213969e+04
+- Memory usage: 1252.2 MB
+
+MATRIX SOLUTION:
+- Status: EXCELLENT (residual = 6.43e-15)
+- Solution time: 15.5358 seconds
+- Relative residual: 6.429902e-15
+- Max current: 2.591308e-01 A/m
+- Current norm: 6.312816e+00
+
+EXECUTION SUMMARY:
+- Z matrix construction: 127.7161 seconds (36.5%)
+- Matrix solution: 15.5358 seconds (4.4%)
+- Total time: 350.1252 seconds
+- End time: 2025-06-01 15:59:53
+- Files timestamp: 2025-06-01_15-54-03

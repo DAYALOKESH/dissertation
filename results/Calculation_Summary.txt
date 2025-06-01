@@ -1,0 +1,22 @@
+EFIE and Hata Model Calculation Summary
+Current Date and Time (UTC): 2025-06-01 14:47:51
+User: DAYALOKESH
+
+Parameters:
+- Frequency: 970.00 MHz
+- Wavelength: 0.3091 m
+- Source Position: (0.0, 442.0) m
+- Observation Height: 2.4 m
+- Base Station Height (Hata): 50.0 m
+- Mobile Station Height (Hata): 1.5 m
+
+Performance:
+- EFIE/MoM Calculation Time: 365.40 seconds
+- Hata Model Calculation Time: 0.25 seconds
+- Total Calculation Time: 365.65 seconds
+
+Results:
+- Max EFIE Field: 22.95 dB
+- Max EFIE Current: 2.5913e-01 A/m
+- Max Hata Field: 157.06 dB
+- Min Hata Path Loss: 22.89 dB

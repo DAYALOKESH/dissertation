@@ -1,0 +1,19 @@
+====================================================
+MoM SOLVER EXECUTION LOG
+====================================================
+Start Time: 2025-06-01 13:19:30
+====================================================
+
+PROBLEM PARAMETERS:
+- Matrix size: 12942 x 12942
+- Frequency: 9.70e+08 Hz
+- Wavelength: 0.3091 m
+- Segment size: 0.0773 m
+- Terrain step size: 10.0 m
+- Max terrain distance: 1000.0 m
+- Terrain file: ./terrain/X.04
+- Terrain points: 102
+- Source: (0.0, 442.0) m
+- Observation height: 2.4 m
+
+Z MATRIX CONSTRUCTION:

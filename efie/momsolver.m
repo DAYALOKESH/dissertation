@@ -1,38 +1,58 @@
-%% MATLAB Implementation for EFIE-based MoM Solver with Optimized Timing and Progress Bars
-function momsolver()
-    clear all; close all; clc;
-    
-    % ==============================
-    % Initialize Timing and Logging
-    % ==============================
+function [J, Et, results] = momsolver(varargin)
+    % Start timing total execution
     start_time_total = tic;
-    run_timestamp = datestr(now, 'dd-mm_HH-MM-SS');
     
-    % Add paths for utility functions
-    addpath('../utils');
-    addpath('../terrain');
+    %% Parse input parameters
+    p = inputParser;
+    p.addParameter('terrainFile', '../terrain/X.04', @ischar);
+    p.addParameter('sourceX', 0.0, @isnumeric);
+    p.addParameter('sourceY', 442.0, @isnumeric);
+    p.addParameter('obsHeight', 2.4, @isnumeric);
+    p.addParameter('grossStep', 10.0, @isnumeric);  % Default step size is 10.0
+    p.addParameter('grossSteps', 70, @isnumeric);
+    p.addParameter('outputDir', '../results', @ischar);
+    p.addParameter('enablePlot', true, @islogical);
+    p.addParameter('enableLog', true, @islogical);
+    p.addParameter('showProgress', true, @islogical);
+    p.parse(varargin{:});
+    
+    params = p.Results;
+    
+    %% Initialize timing and logging
+    run_timestamp = datestr(now, 'yyyy-mm-dd_HH-MM-SS');
     
     % Create results directory if it doesn't exist
-    if ~exist('../results', 'dir')
-        mkdir('../results');
+    if ~exist(params.outputDir, 'dir')
+        mkdir(params.outputDir);
     end
     
-    % Initialize log file
-    log_filename = sprintf('../results/run-time_%s.log', run_timestamp);
-    log_file = fopen(log_filename, 'w');
-    
-    % Write log header
-    fprintf(log_file, '====================================================\n');
-    fprintf(log_file, 'MoM SOLVER EXECUTION LOG\n');
-    fprintf(log_file, '====================================================\n');
-    fprintf(log_file, 'Start Time: %s\n', datestr(now, 'dd/mm/yyyy HH:MM:SS'));
-    fprintf(log_file, '====================================================\n\n');
+    % Initialize log file if enabled
+    log_file = [];
+    if params.enableLog
+        log_filename = fullfile(params.outputDir, sprintf('run-time_%s.log', run_timestamp));
+        log_file = fopen(log_filename, 'w');
+        
+        % Write log header
+        fprintf(log_file, '====================================================\n');
+        fprintf(log_file, 'MoM SOLVER EXECUTION LOG\n');
+        fprintf(log_file, '====================================================\n');
+        fprintf(log_file, 'Start Time: %s\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+        fprintf(log_file, '====================================================\n\n');
+        
+        fprintf('Log file: %s\n', log_filename);
+    end
     
     fprintf('Starting MoM solver execution...\n');
     
-    % ==============================
-    % Get Physical Constants and Setup
-    % ==============================
+    %% Get Physical Constants from utility function
+    % Add required paths if not already added
+    if ~exist('physical_constants', 'file')
+        addpath('../utils');
+    end
+    if ~exist('fileparser', 'file')
+        addpath('../terrain');
+    end
+    
     constants = physical_constants();
     PI = constants.PI;
     Epsilon_0 = constants.Epsilon_0;
@@ -44,57 +64,82 @@ function momsolver()
     Omega = constants.Omega;
     Beta_0 = constants.Beta_0;
     
-    % Terrain and Source Parameters
-    GrossStep = 10.0;
-    GrossNoSteps = 70;
+    %% Setup problem parameters
+    % Source and Terrain Parameters
+    GrossStep = params.grossStep;  % Default is 10.0
+    GrossNoSteps = params.grossSteps;
     NoLinesubs = floor((GrossStep * GrossNoSteps) / DeltaX);
     
     % Source and Observation Parameters
-    Xsource = 0.0;
-    Ysource = 442.0;
-    H = 2.4;
+    Xsource = params.sourceX;
+    Ysource = params.sourceY;
+    H = params.obsHeight;
     
-    % Read Terrain Data
-    terrain_data = fileparser('../terrain/X.04');
-    X_terrain = terrain_data(:, 1);
-    Y_terrain = terrain_data(:, 2);
+    % Read Terrain Data using the fileparser function with distance limit
+    try
+        % Calculate the maximum terrain distance needed based on grossStep and grossNoSteps
+        maxTerrainDistance = GrossStep * GrossNoSteps;
+        
+        % Use fileparser to load terrain data up to the calculated distance
+        terrain_data = fileparser(params.terrainFile, maxTerrainDistance);
+        X_terrain = terrain_data(:, 1);
+        Y_terrain = terrain_data(:, 2);
+        
+        fprintf('Loaded terrain data: %d points (up to %.1f m)\n', length(X_terrain), maxTerrainDistance);
+    catch ME
+        error('Failed to load terrain data: %s', ME.message);
+    end
     
     % Log problem parameters
-    fprintf(log_file, 'PROBLEM PARAMETERS:\n');
-    fprintf(log_file, '- Matrix size: %d x %d\n', NoLinesubs, NoLinesubs);
-    fprintf(log_file, '- Frequency: %.2e Hz\n', f);
-    fprintf(log_file, '- Wavelength: %.4f m\n', Lambda);
-    fprintf(log_file, '- Terrain points: %d\n', length(X_terrain));
-    fprintf(log_file, '- Source: (%.1f, %.1f) m\n\n', Xsource, Ysource);
+    if params.enableLog && ~isempty(log_file)
+        fprintf(log_file, 'PROBLEM PARAMETERS:\n');
+        fprintf(log_file, '- Matrix size: %d x %d\n', NoLinesubs, NoLinesubs);
+        fprintf(log_file, '- Frequency: %.2e Hz\n', f);
+        fprintf(log_file, '- Wavelength: %.4f m\n', Lambda);
+        fprintf(log_file, '- Segment size: %.4f m\n', DeltaX);
+        fprintf(log_file, '- Terrain step size: %.1f m\n', GrossStep);
+        fprintf(log_file, '- Max terrain distance: %.1f m\n', maxTerrainDistance);
+        fprintf(log_file, '- Terrain file: %s\n', params.terrainFile);
+        fprintf(log_file, '- Terrain points: %d\n', length(X_terrain));
+        fprintf(log_file, '- Source: (%.1f, %.1f) m\n', Xsource, Ysource);
+        fprintf(log_file, '- Observation height: %.1f m\n\n', H);
+    end
     
     fprintf('Matrix size: %d x %d (%.1f MB)\n', NoLinesubs, NoLinesubs, ...
         (NoLinesubs^2 * 16) / (1024^2)); % 16 bytes per complex double
     
-    % ==============================
-    % Build Z Matrix with Progress Bar
-    % ==============================
+    %% Build Z Matrix with Progress Bar
     fprintf('\n=== Z MATRIX CONSTRUCTION ===\n');
-    fprintf(log_file, 'Z MATRIX CONSTRUCTION:\n');
+    if params.enableLog && ~isempty(log_file)
+        fprintf(log_file, 'Z MATRIX CONSTRUCTION:\n');
+    end
     
     z_matrix_start = tic;
     Z = complex(zeros(NoLinesubs, NoLinesubs));
     
-    % Initialize progress bar
-    fprintf('Building Z matrix...\n');
-    fprintf('[');
-    progress_width = 50;
-    last_progress = 0;
+    % Initialize progress tracking
+    if params.showProgress
+        fprintf('Building Z matrix...\n');
+        fprintf('[');
+        progress_width = 50;
+        last_progress = 0;
+    end
     
     for p = 1:NoLinesubs
-        % Calculate current progress
-        current_progress = floor((p / NoLinesubs) * progress_width);
-        
-        % Update progress bar
-        if current_progress > last_progress
-            for i = last_progress+1:current_progress
-                fprintf('=');
+        % Update progress bar if enabled
+        if params.showProgress
+            current_progress = floor((p / NoLinesubs) * progress_width);
+            if current_progress > last_progress
+                for i = last_progress+1:current_progress
+                    fprintf('=');
+                end
+                last_progress = current_progress;
             end
-            last_progress = current_progress;
+            
+            % Display percentage every 10%
+            if mod(p, floor(NoLinesubs/10)) == 0
+                fprintf(' %d%%', round((p/NoLinesubs)*100));
+            end
         end
         
         % Build matrix row
@@ -112,18 +157,15 @@ function momsolver()
                          (besselj(0, Beta_0*Rpq) - 1i*bessely(0, Beta_0*Rpq));
             end
         end
-        
-        % Display percentage every 10%
-        if mod(p, floor(NoLinesubs/10)) == 0
-            fprintf(' %d%%', round((p/NoLinesubs)*100));
-        end
     end
     
-    % Complete progress bar
-    for i = last_progress+1:progress_width
-        fprintf('=');
+    % Complete progress bar if enabled
+    if params.showProgress
+        for i = last_progress+1:progress_width
+            fprintf('=');
+        end
+        fprintf('] 100%%\n');
     end
-    fprintf('] 100%%\n');
     
     z_matrix_time = toc(z_matrix_start);
     
@@ -135,20 +177,24 @@ function momsolver()
     
     if cond_Z > 1e12
         fprintf(' [WARNING: ILL-CONDITIONED]\n');
-        fprintf(log_file, '- Status: ILL-CONDITIONED (cond = %.2e)\n', cond_Z);
+        if params.enableLog && ~isempty(log_file)
+            fprintf(log_file, '- Status: ILL-CONDITIONED (cond = %.2e)\n', cond_Z);
+        end
     else
         fprintf(' [OK]\n');
-        fprintf(log_file, '- Status: WELL-CONDITIONED\n');
+        if params.enableLog && ~isempty(log_file)
+            fprintf(log_file, '- Status: WELL-CONDITIONED\n');
+        end
     end
     
-    fprintf(log_file, '- Construction time: %.4f seconds\n', z_matrix_time);
-    fprintf(log_file, '- Condition number: %.6e\n', cond_Z);
-    fprintf(log_file, '- Matrix norm: %.6e\n', norm(Z, 'fro'));
-    fprintf(log_file, '- Memory usage: %.1f MB\n\n', (NoLinesubs^2 * 16) / (1024^2));
+    if params.enableLog && ~isempty(log_file)
+        fprintf(log_file, '- Construction time: %.4f seconds\n', z_matrix_time);
+        fprintf(log_file, '- Condition number: %.6e\n', cond_Z);
+        fprintf(log_file, '- Matrix norm: %.6e\n', norm(Z, 'fro'));
+        fprintf(log_file, '- Memory usage: %.1f MB\n\n', (NoLinesubs^2 * 16) / (1024^2));
+    end
     
-    % ==============================
-    % Build E Vector (Quick)
-    % ==============================
+    %% Build E Vector (Incident Field)
     fprintf('\nBuilding incident field vector...');
     E = complex(zeros(NoLinesubs, 1));
     
@@ -159,11 +205,11 @@ function momsolver()
     end
     fprintf(' Done\n');
     
-    % ==============================
-    % Solve Matrix Equation with Progress Monitoring
-    % ==============================
+    %% Solve Matrix Equation
     fprintf('\n=== MATRIX SOLUTION ===\n');
-    fprintf(log_file, 'MATRIX SOLUTION:\n');
+    if params.enableLog && ~isempty(log_file)
+        fprintf(log_file, 'MATRIX SOLUTION:\n');
+    end
     
     fprintf('Solving J = Z\\E using MATLAB backslash operator...\n');
     solve_start = tic;
@@ -185,38 +231,54 @@ function momsolver()
     
     if residual < 1e-10
         fprintf(' [EXCELLENT]\n');
-        fprintf(log_file, '- Status: EXCELLENT (residual = %.2e)\n', residual);
+        if params.enableLog && ~isempty(log_file)
+            fprintf(log_file, '- Status: EXCELLENT (residual = %.2e)\n', residual);
+        end
     elseif residual < 1e-6
         fprintf(' [GOOD]\n');
-        fprintf(log_file, '- Status: GOOD (residual = %.2e)\n', residual);
+        if params.enableLog && ~isempty(log_file)
+            fprintf(log_file, '- Status: GOOD (residual = %.2e)\n', residual);
+        end
     else
         fprintf(' [POOR - CHECK RESULTS]\n');
-        fprintf(log_file, '- Status: POOR (residual = %.2e)\n', residual);
+        if params.enableLog && ~isempty(log_file)
+            fprintf(log_file, '- Status: POOR (residual = %.2e)\n', residual);
+        end
     end
     
-    fprintf(log_file, '- Solution time: %.4f seconds\n', solve_time);
-    fprintf(log_file, '- Relative residual: %.6e\n', residual);
-    fprintf(log_file, '- Max current: %.6e A/m\n', max(abs(J)));
-    fprintf(log_file, '- Current norm: %.6e\n\n', norm(J));
+    if params.enableLog && ~isempty(log_file)
+        fprintf(log_file, '- Solution time: %.4f seconds\n', solve_time);
+        fprintf(log_file, '- Relative residual: %.6e\n', residual);
+        fprintf(log_file, '- Max current: %.6e A/m\n', max(abs(J)));
+        fprintf(log_file, '- Current norm: %.6e\n\n', norm(J));
+    end
     
-    % ==============================
-    % Calculate Electric Field with Progress Bar
-    % ==============================
+    %% Calculate Electric Field with Progress Bar
     fprintf('\n=== FIELD CALCULATION ===\n');
     fprintf('Computing scattered field...\n');
-    fprintf('[');
+    
+    if params.showProgress
+        fprintf('[');
+        last_progress = 0;
+    end
     
     Et = complex(zeros(1, NoLinesubs));
-    last_progress = 0;
     
     for idx = 1:NoLinesubs
-        % Update progress bar
-        current_progress = floor((idx / NoLinesubs) * progress_width);
-        if current_progress > last_progress
-            for i = last_progress+1:current_progress
-                fprintf('=');
+        % Update progress bar if enabled
+        if params.showProgress
+            current_progress = floor((idx / NoLinesubs) * progress_width);
+            if current_progress > last_progress
+                for i = last_progress+1:current_progress
+                    fprintf('=');
+                end
+                last_progress = current_progress;
             end
-            last_progress = current_progress;
+            
+            % Display percentage
+            if mod(idx, floor(NoLinesubs/10)) == 0
+                fprintf(' %d%%', round((idx/NoLinesubs)*100));
+            end
         end
         
         % Calculate scattered field
@@ -233,36 +295,31 @@ function momsolver()
         Ei = -(Beta_0^2/(4*Omega*Epsilon_0)) * ...
             (besselj(0, Beta_0*R_obs) - 1i*bessely(0, Beta_0*R_obs));
         Et(idx) = Ei - Et_scattered;
-        
-        % Display percentage
-        if mod(idx, floor(NoLinesubs/10)) == 0
-            fprintf(' %d%%', round((idx/NoLinesubs)*100));
+    end
+    
+    % Complete progress bar if enabled
+    if params.showProgress
+        for i = last_progress+1:progress_width
+            fprintf('=');
         end
+        fprintf('] 100%%\n');
     end
     
-    % Complete progress bar
-    for i = last_progress+1:progress_width
-        fprintf('=');
-    end
-    fprintf('] 100%%\n');
-    
-    % ==============================
-    % Generate Output Files and Plots
-    % ==============================
+    %% Generate Output Files and Plots
     fprintf('\n=== OUTPUT GENERATION ===\n');
     fprintf('Writing results to files...');
     write_results_timestamped(J, Et, X_terrain, Y_terrain, DeltaX, GrossStep, NoLinesubs, ...
-                             Xsource, Ysource, H, run_timestamp);
+                             Xsource, Ysource, H, run_timestamp, params.outputDir);
     fprintf(' Done\n');
     
-    fprintf('Generating plots...');
-    plot_results_timestamped(J, Et, X_terrain, Y_terrain, DeltaX, GrossStep, NoLinesubs, ...
-                            Xsource, Ysource, H, run_timestamp);
-    fprintf(' Done\n');
+    if params.enablePlot
+        fprintf('Generating plots...');
+        plot_results_timestamped(J, Et, X_terrain, Y_terrain, DeltaX, GrossStep, NoLinesubs, ...
+                                Xsource, Ysource, H, run_timestamp, params.outputDir);
+        fprintf(' Done\n');
+    end
     
-    % ==============================
-    % Final Summary
-    % ==============================
+    %% Final Summary
     total_time = toc(start_time_total);
     
     fprintf('\n====================================================\n');
@@ -276,23 +333,39 @@ function momsolver()
     fprintf('TOTAL EXECUTION TIME:  %8.2f s\n', total_time);
     fprintf('====================================================\n');
     
-    fprintf(log_file, 'EXECUTION SUMMARY:\n');
-    fprintf(log_file, '- Z matrix construction: %.4f seconds (%.1f%%)\n', z_matrix_time, (z_matrix_time/total_time)*100);
-    fprintf(log_file, '- Matrix solution: %.4f seconds (%.1f%%)\n', solve_time, (solve_time/total_time)*100);
-    fprintf(log_file, '- Total time: %.4f seconds\n', total_time);
-    fprintf(log_file, '- End time: %s\n', datestr(now, 'dd/mm/yyyy HH:MM:SS'));
-    fprintf(log_file, '- Files timestamp: %s\n', run_timestamp);
+    if params.enableLog && ~isempty(log_file)
+        fprintf(log_file, 'EXECUTION SUMMARY:\n');
+        fprintf(log_file, '- Z matrix construction: %.4f seconds (%.1f%%)\n', z_matrix_time, (z_matrix_time/total_time)*100);
+        fprintf(log_file, '- Matrix solution: %.4f seconds (%.1f%%)\n', solve_time, (solve_time/total_time)*100);
+        fprintf(log_file, '- Total time: %.4f seconds\n', total_time);
+        fprintf(log_file, '- End time: %s\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+        fprintf(log_file, '- Files timestamp: %s\n', run_timestamp);
+        
+        % Close log file
+        fclose(log_file);
+    end
     
     fprintf('\nAll files saved with timestamp: %s\n', run_timestamp);
-    fprintf('Log file: %s\n', log_filename);
     
-    % Close log file
-    fclose(log_file);
+    % Prepare output structure
+    results = struct(...
+        'timestamp', run_timestamp, ...
+        'frequency', f, ...
+        'wavelength', Lambda, ...
+        'numSegments', NoLinesubs, ...
+        'conditionNumber', cond_Z, ...
+        'residual', residual, ...
+        'timing', struct(...
+            'zMatrix', z_matrix_time, ...
+            'solve', solve_time, ...
+            'total', total_time), ...
+        'maxCurrent', max(abs(J)), ...
+        'maxField', max(abs(Et)), ...
+        'source', struct('x', Xsource, 'y', Ysource), ...
+        'obsHeight', H);
 end
 
-% ========================================================================
-% Auxiliary Functions (Same as before but more streamlined)
-% ========================================================================
+%% Auxiliary Functions
 
 function x = x_coord(a, DeltaX)
     x = a * DeltaX;
@@ -343,7 +416,7 @@ end
 function L = segment_length(p, X_terrain, Y_terrain, DeltaX, GrossStep)
     if p == 1
         R = distance_p_q(p, p+1, X_terrain, Y_terrain, DeltaX, GrossStep);
-    elseif p == floor((10.0 * 70) / DeltaX)
+    elseif p == floor((GrossStep * 70) / DeltaX)
         R = distance_p_q(p-1, p, X_terrain, Y_terrain, DeltaX, GrossStep);
     else
         R1 = distance_p_q(p-1, p, X_terrain, Y_terrain, DeltaX, GrossStep);
@@ -354,11 +427,11 @@ function L = segment_length(p, X_terrain, Y_terrain, DeltaX, GrossStep)
 end
 
 function write_results_timestamped(J, Et, X_terrain, Y_terrain, DeltaX, GrossStep, NoLinesubs, ...
-                                  Xsource, Ysource, H, timestamp)
+                                  Xsource, Ysource, H, timestamp, outputDir)
     % Surface Current Output
-    current_filename = sprintf('../results/SurfaceCurrent_MoM_%s.dat', timestamp);
+    current_filename = fullfile(outputDir, sprintf('SurfaceCurrent_MoM_%s.dat', timestamp));
     fileID = fopen(current_filename, 'w');
-    fprintf(fileID, '%% MoM Surface Current Results - Generated: %s\n', datestr(now));
+    fprintf(fileID, '%% MoM Surface Current Results - Generated: %s\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
     fprintf(fileID, '%% Distance(m)\tMagnitude(A/m)\tReal(A/m)\tImag(A/m)\tPhase(deg)\n');
     for idx = 1:NoLinesubs
         x_pos = x_coord(idx, DeltaX);
@@ -369,9 +442,9 @@ function write_results_timestamped(J, Et, X_terrain, Y_terrain, DeltaX, GrossSte
     fclose(fileID);
     
     % Electric Field Output
-    field_filename = sprintf('../results/ElectricField_MoM_%s.dat', timestamp);
+    field_filename = fullfile(outputDir, sprintf('ElectricField_MoM_%s.dat', timestamp));
     fileID = fopen(field_filename, 'w');
-    fprintf(fileID, '%% MoM Electric Field Results - Generated: %s\n', datestr(now));
+    fprintf(fileID, '%% MoM Electric Field Results - Generated: %s\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
     fprintf(fileID, '%% Distance(m)\tField_dB\tMagnitude(V/m)\tReal(V/m)\tImag(V/m)\tPhase(deg)\n');
     for idx = 1:NoLinesubs
         x_pos = x_coord(idx, DeltaX);
@@ -384,7 +457,7 @@ function write_results_timestamped(J, Et, X_terrain, Y_terrain, DeltaX, GrossSte
     fclose(fileID);
     
     % Quick CSV Summary
-    csv_filename = sprintf('../results/Results_Summary_%s.csv', timestamp);
+    csv_filename = fullfile(outputDir, sprintf('Results_Summary_%s.csv', timestamp));
     fileID = fopen(csv_filename, 'w');
     fprintf(fileID, 'Distance_m,Current_Mag,Current_Phase_deg,Field_Mag,Field_dB\n');
     for idx = 1:NoLinesubs
@@ -399,7 +472,7 @@ function write_results_timestamped(J, Et, X_terrain, Y_terrain, DeltaX, GrossSte
 end
 
 function plot_results_timestamped(J, Et, X_terrain, Y_terrain, DeltaX, GrossStep, NoLinesubs, ...
-                                 Xsource, Ysource, H, timestamp)
+                                 Xsource, Ysource, H, timestamp, outputDir)
     % Generate coordinates
     x_coords = arrayfun(@(idx) x_coord(idx, DeltaX), 1:NoLinesubs);
     
@@ -464,7 +537,7 @@ function plot_results_timestamped(J, Et, X_terrain, Y_terrain, DeltaX, GrossStep
     sgtitle(sprintf('MoM Solution Results - %s', timestamp), 'FontSize', 14, 'FontWeight', 'bold');
     
     % Save plots
-    fig_name = sprintf('../results/MoM_Results_%s', timestamp);
+    fig_name = fullfile(outputDir, sprintf('MoM_Results_%s', timestamp));
     saveas(fig1, [fig_name '.fig']);
     saveas(fig1, [fig_name '.png']);
     close(fig1);
