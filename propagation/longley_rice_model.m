@@ -177,17 +177,35 @@ function [total_pathloss, reflection_loss, diffraction_loss, freespace_loss, ele
     %% Combine Components for Total Path Loss
     fprintf('\n=== COMBINING COMPONENTS ===\n');
     
-    % The Longley-Rice model combines components in a complex manner
-    % For this implementation, we use a simplified combination approach
-    % that accounts for the dominant mechanisms at different distances
+    % The Longley-Rice model combines components using proper RF power combination
+    % Each component affects the received power, so we combine in power domain
     
     for i = 1:num_points
-        % Determine dominant propagation mechanism
-        if distances(i) < 100  % Near field - direct + reflection dominant
-            total_pathloss(i) = combine_near_field(freespace_loss(i), reflection_loss(i), diffraction_loss(i));
-        else  % Far field - all components contribute
-            total_pathloss(i) = combine_far_field(freespace_loss(i), reflection_loss(i), diffraction_loss(i));
+        % Convert individual losses to linear power ratios
+        fs_power_ratio = 10^(-freespace_loss(i)/10);  % Basic free space attenuation
+        
+        % Ground reflection modifies the free space field
+        % reflection_loss is already the modifier (can be + or -)
+        refl_power_ratio = 10^(-reflection_loss(i)/10);
+        
+        % Diffraction adds additional loss beyond free space
+        diff_power_ratio = 10^(-diffraction_loss(i)/10);
+        
+        % Combine the effects:
+        % Start with free space, apply reflection effect, then diffraction loss
+        total_power_ratio = fs_power_ratio * refl_power_ratio * diff_power_ratio;
+        
+        % Convert back to dB
+        total_pathloss(i) = -10 * log10(total_power_ratio);
+        
+        % Ensure reasonable bounds (avoid numerical issues)
+        if isnan(total_pathloss(i)) || isinf(total_pathloss(i))
+            total_pathloss(i) = freespace_loss(i);  % Fall back to free space
         end
+        
+        % Practical limits for path loss
+        total_pathloss(i) = max(total_pathloss(i), freespace_loss(i) - 10);  % Max 10 dB gain from reflection
+        total_pathloss(i) = min(total_pathloss(i), freespace_loss(i) + 50);   % Max 50 dB additional loss
     end
     
     fprintf('Total path loss range: %.1f to %.1f dB\n', min(total_pathloss), max(total_pathloss));
@@ -195,16 +213,27 @@ function [total_pathloss, reflection_loss, diffraction_loss, freespace_loss, ele
     %% Calculate Electric Field Strength
     fprintf('\n=== CALCULATING ELECTRIC FIELD ===\n');
     
-    % Assume 1W (0 dBW = 30 dBm) transmit power for field calculations
-    tx_power_dBm = 30;  % 1W = 30 dBm
+    % Calculate electric field strength from path loss
+    % Standard reference: E(dBμV/m) = P(dBm) + Gr(dBi) + 107 - PL(dB)
+    % Where: P = transmit power, Gr = receive antenna gain, 107 = conversion factor
+    % Assume 1W (30 dBm) transmit power and 0 dBi receive antenna gain
     
-    % Convert path loss to electric field
-    % E(dBμV/m) = P(dBm) + 108.8 - PL(dB) for vertical polarization at 1m
-    % Then convert to V/m: E(V/m) = 10^((E(dBμV/m) - 120)/20)
+    tx_power_dBm = 30;  % 1W = 30 dBm
+    rx_antenna_gain_dBi = 0;  % Isotropic antenna
     
     for i = 1:num_points
-        E_dBuV_m = tx_power_dBm + 108.8 - total_pathloss(i);
-        electric_field(i) = 10^((E_dBuV_m - 120)/20);  % Convert to V/m
+        % Calculate field strength in dBμV/m
+        E_dBuV_m = tx_power_dBm + rx_antenna_gain_dBi + 107 - total_pathloss(i);
+        
+        % Convert to V/m: E(V/m) = 10^((E(dBμV/m) - 120)/20)
+        electric_field(i) = 10^((E_dBuV_m - 120)/20);
+        
+        % Ensure reasonable bounds
+        if electric_field(i) < 1e-9
+            electric_field(i) = 1e-9;  % Minimum field level
+        elseif electric_field(i) > 1e3
+            electric_field(i) = 1e3;   % Maximum field level
+        end
     end
     
     fprintf('Electric field range: %.2e to %.2e V/m\n', min(electric_field), max(electric_field));
@@ -244,51 +273,71 @@ end
 %% Supporting Functions
 
 function reflection_loss = calculate_ground_reflection(distances, terrain_heights, tx_height, rx_height, lambda, conductivity, permittivity, polarization)
-    %Calculate ground reflection loss component
+    %Calculate ground reflection loss component using proper two-ray model
     
     num_points = length(distances);
     reflection_loss = zeros(num_points, 1);
     
-    % Ground reflection calculations
+    % Ground reflection calculations using improved two-ray model
     for i = 1:num_points
         d = distances(i);
         h_terrain = terrain_heights(i);
+        
+        % Skip very small distances to avoid numerical issues
+        if d < 1.0
+            reflection_loss(i) = 0;
+            continue;
+        end
         
         % Calculate effective antenna heights above local terrain
         h_tx_eff = tx_height;  % Transmitter height above reference
         h_rx_eff = rx_height + h_terrain;  % Receiver height above local terrain
         
-        % Two-ray model for ground reflection
-        if d > 0
-            % Direct path distance
-            d_direct = sqrt(d^2 + (h_tx_eff - h_rx_eff)^2);
-            
-            % Reflected path distance (assuming flat earth approximation)
-            d_reflected = sqrt(d^2 + (h_tx_eff + h_rx_eff)^2);
-            
-            % Path difference
-            delta_path = d_reflected - d_direct;
-            
-            % Phase difference
-            phi = 2 * pi * delta_path / lambda;
-            
-            % Grazing angle (approximation)
-            theta_g = atan(2 * h_tx_eff * h_rx_eff / d^2);
-            
-            % Reflection coefficient (Fresnel coefficients)
-            R = calculate_reflection_coefficient(theta_g, conductivity, permittivity, lambda, polarization);
-            
-            % Two-ray interference
-            E_direct = 1 / d_direct;
-            E_reflected = abs(R) / d_reflected;
-            
-            % Vector addition considering phase
-            E_total_mag = abs(E_direct + E_reflected * exp(1j * (phi + angle(R))));
-            
-            % Reflection loss relative to free space
-            reflection_loss(i) = -20 * log10(E_total_mag * d);
+        % Direct path distance and field
+        d_direct = sqrt(d^2 + (h_tx_eff - h_rx_eff)^2);
+        E_direct = 1.0 / d_direct;  % Direct path field amplitude
+        
+        % Reflected path geometry
+        d_reflected = sqrt(d^2 + (h_tx_eff + h_rx_eff)^2);
+        
+        % Path difference
+        delta_path = d_reflected - d_direct;
+        
+        % Phase difference due to path length difference
+        phi_path = 2 * pi * delta_path / lambda;
+        
+        % Grazing angle for reflection coefficient (improved calculation)
+        theta_g = atan2(h_tx_eff + h_rx_eff, d);  % More accurate grazing angle
+        
+        % Calculate Fresnel reflection coefficient
+        R = calculate_reflection_coefficient(theta_g, conductivity, permittivity, lambda, polarization);
+        
+        % Reflected field amplitude with geometric spreading
+        E_reflected_amp = abs(R) / d_reflected;
+        
+        % Total phase including reflection coefficient phase
+        total_phase = phi_path + angle(R);
+        
+        % Vector sum of direct and reflected fields
+        E_direct_complex = E_direct + 0j;  % Direct field (reference phase = 0)
+        E_reflected_complex = E_reflected_amp * exp(1j * total_phase);
+        E_total_complex = E_direct_complex + E_reflected_complex;
+        
+        % Total field magnitude
+        E_total_mag = abs(E_total_complex);
+        
+        % Reflection loss: difference from direct path alone
+        % Positive values mean reflection reduces signal, negative means enhancement
+        if E_total_mag > 0
+            reflection_loss(i) = 20 * log10(E_total_mag / E_direct);
         else
-            reflection_loss(i) = 0;
+            reflection_loss(i) = -40;  % Very large loss if field cancels out
+        end
+        
+        % Apply smoothing for very close distances where model breaks down
+        if d < 10.0
+            smoothing_factor = d / 10.0;
+            reflection_loss(i) = reflection_loss(i) * smoothing_factor;
         end
     end
 end
@@ -362,21 +411,56 @@ function edges = find_knife_edges(path_distances, path_heights, tx_x, tx_y, rx_x
     % Find clearances (negative means obstruction)
     clearances = los_heights - path_heights;
     
-    % Find local minima in clearance (potential knife edges)
+    % Calculate first Fresnel zone radius at each point
+    total_distance = rx_x - tx_x;
+    lambda = 0.309;  % wavelength for 970 MHz (approx 0.31m)
+    
+    % Find points that obstruct the first Fresnel zone
+    significant_obstructions = [];
     for i = 2:length(clearances)-1
-        if clearances(i) < clearances(i-1) && clearances(i) < clearances(i+1)
-            % Check if obstruction is significant (Fresnel zone consideration)
-            fresnel_radius = sqrt(lambda * path_distances(i) * (rx_x - path_distances(i)) / rx_x) / 2;
-            if clearances(i) < -0.1 * fresnel_radius  % 10% of first Fresnel zone
-                edges = [edges; path_distances(i), path_heights(i)];
+        d1 = path_distances(i) - tx_x;
+        d2 = rx_x - path_distances(i);
+        
+        % First Fresnel zone radius at this point
+        if d1 > 0 && d2 > 0 && total_distance > 0
+            F1_radius = sqrt(lambda * d1 * d2 / total_distance);
+            
+            % Check if terrain intrudes into Fresnel zone
+            if clearances(i) < -0.2 * F1_radius  % 20% of first Fresnel zone (less aggressive)
+                significant_obstructions = [significant_obstructions; i];
             end
         end
     end
     
-    % Limit to 3 most significant edges
+    % If no significant obstructions found, try to find highest obstacles
+    if isempty(significant_obstructions)
+        # Find local maxima in terrain that are above LOS line
+        for i = 2:length(clearances)-1
+            if clearances(i) < clearances(i-1) && clearances(i) < clearances(i+1) && clearances(i) < -0.5
+                significant_obstructions = [significant_obstructions; i];
+            end
+        end
+    end
+    
+    % Create edges from significant obstructions
+    for i = 1:length(significant_obstructions)
+        idx = significant_obstructions(i);
+        edges = [edges; path_distances(idx), path_heights(idx)];
+    end
+    
+    % Limit to most significant edges (up to 3)
     if size(edges, 1) > 3
-        [~, idx] = sort(los_heights(ismember(path_distances, edges(:,1))) - edges(:,2));
-        edges = edges(idx(1:3), :);
+        % Calculate obstruction severity
+        obstruction_severity = zeros(size(edges, 1), 1);
+        for i = 1:size(edges, 1)
+            edge_idx = find(path_distances == edges(i, 1));
+            if ~isempty(edge_idx)
+                obstruction_severity(i) = -clearances(edge_idx(1));  % Negative clearance = obstruction
+            end
+        end
+        
+        [~, idx] = sort(obstruction_severity, 'descend');
+        edges = edges(idx(1:min(3, end)), :);
     end
 end
 
@@ -460,18 +544,7 @@ function loss = calculate_single_edge_diffraction(tx_x, tx_y, edge_x, edge_y, rx
     end
 end
 
-function total_loss = combine_near_field(fs_loss, refl_loss, diff_loss)
-    %Combine losses for near field (< 100m)
-    % In near field, reflection and direct path interference dominates
-    total_loss = fs_loss + refl_loss + 0.1 * diff_loss;
-end
 
-function total_loss = combine_far_field(fs_loss, refl_loss, diff_loss)
-    %Combine losses for far field (> 100m)
-    % Use log-sum combination to avoid simple addition
-    losses = [fs_loss, fs_loss + refl_loss, fs_loss + diff_loss];
-    total_loss = -10 * log10(sum(10.^(-losses/10)));
-end
 
 function save_longley_rice_results(output_dir, distances, total_loss, refl_loss, diff_loss, fs_loss, e_field, results)
     %Save calculation results to file
